@@ -36,41 +36,43 @@ var spotr_worker = new function(){
 					//object looks like  { id: 'asd',key: 'asd',value: { rev: '1-7e92b7a8f8da380d9224101bc0d3de9a' }, doc: { _id: 'asd',_rev: '1-7e92b7a8f8da380d9224101bc0d3de9a', title: 'asd(...) 
 					object = object.doc;
 
-					console.log('receive posts from facebook ...');
-					self.getPostsFromFB(object.facebook,function(res){
-						console.log('received '+res.data.length+' entries from feed');
-						res.data.forEach(function(item) {
+					if(object.facebook){
+						console.log('receive posts from facebook ...');
+						self.getPostsFromFB(object.facebook,function(res){
+							console.log('received '+res.data.length+' entries from feed');
+							res.data.forEach(function(item) {
 
-						  	item._id = 'fb-post-'+config.user_id+'-'+item.id;
+							  	item._id = 'fb-post-'+config.user_id+'-'+item.id;
 
-						  	if(idsInDB.indexOf(item._id)>-1){
-						  		//console.log('allready in db');
-						  		return true;
-						  	}
+							  	if(idsInDB.indexOf(item._id)>-1){
+							  		//console.log('allready in db');
+							  		return true;
+							  	}
 
-						  	delete item.id;
-						  	item.post_type=item.type;
-						  	item.type='facebook';
-						  	item.post_id=item.id;
-						  	item.user_id = config.user_id;
-						  	item.author = object.facebook;
-						  	item.timestamp = new Date(item.created_time).toISOString();
-						  	item.seen = false;
-						  	item.ignore = false;
-						  	item.created_post = null;
-						  	items.push(item);
+							  	delete item.id;
+							  	item.post_type=item.type;
+							  	item.type='facebook';
+							  	item.post_id=item.id;
+							  	item.user_id = config.user_id;
+							  	item.author = object.facebook;
+							  	item.timestamp = new Date(item.created_time).toISOString();
+							  	item.seen = false;
+							  	item.ignore = false;
+							  	item.created_post = null;
+							  	items.push(item);
 
-						});
-
-
-						if(items.length > 0)
-							self.postsDB.bulk({docs:items}, function(err, body) {
-								  console.log('request done:')
-								  console.log(body);
 							});
-						else
-							console.log('nothing to update');
-					});
+
+
+							if(items.length > 0)
+								self.postsDB.bulk({docs:items}, function(err, body) {
+									  console.log('request done:')
+									  console.log(body);
+								});
+							else
+								console.log('nothing to update');
+						});
+					}
 				});
 
 			});
