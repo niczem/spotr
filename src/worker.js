@@ -2,12 +2,12 @@ var config = require('./config.js');
 var objects = require('./objects.js');
 
 var FB = require('fb');
+var Twitter = require('twitter');
 
+//init pouchdb with remote db
 var splitted_url = config.db_remote_url.split('://');
 var auth_url = splitted_url[0]+'://'+config.db_username+':'+config.db_password+'@'+splitted_url[1];
-console.log(auth_url);
-
-var nano = require('nano')(auth_url); // store cookies, normally redis or something
+var nano = require('nano')(auth_url);
 
 
 
@@ -15,8 +15,6 @@ var spotr_worker = new function(){
 
 	this.postsDB = nano.use('posts');
 	this.targetDB = nano.use('targets');
-
-
 
 	this.run = function(){
 		var items = [];
@@ -37,8 +35,10 @@ var spotr_worker = new function(){
 					object = object.doc;
 
 					if(object.facebook){
+						
 						console.log('receive posts from facebook ...');
 						self.getPostsFromFB(object.facebook,function(res){
+							items = [];
 							console.log('received '+res.data.length+' entries from feed');
 							res.data.forEach(function(item) {
 
@@ -49,16 +49,17 @@ var spotr_worker = new function(){
 							  		return true;
 							  	}
 
+							  	item.post_id=item.id;
 							  	delete item.id;
 							  	item.post_type=item.type;
 							  	item.type='facebook';
-							  	item.post_id=item.id;
 							  	item.user_id = config.user_id;
-							  	item.author = object.facebook;
+							  	item.author = {'targetId':object._id, 'facebook':object.facebook};
 							  	item.timestamp = new Date(item.created_time).toISOString();
 							  	item.seen = false;
 							  	item.ignore = false;
 							  	item.created_post = null;
+							  	item.original_message = item.message;
 							  	items.push(item);
 
 							});
@@ -71,6 +72,59 @@ var spotr_worker = new function(){
 								});
 							else
 								console.log('nothing to update');
+
+
+						});
+
+					}
+					if(object.twitter){
+
+						console.log('receive posts from twitter ...')
+						self.getPostsFromTwitter(object.twitter,function(tweets){
+							items = [];
+							tweets.forEach(function(item){
+
+								item._id = 'twitter-post-'+config.user_id+'-'+item.id;
+
+							  	if(idsInDB.indexOf(item._id)>-1){
+							  		//console.log('allready in db');
+							  		return true;
+							  	}
+
+							  	item.post_id=item.id;
+							  	delete item.id;
+							  	item.post_type=item.type;
+							  	item.type='twitter';
+							  	item.user_id = config.user_id;
+							  	item.author = {'targetId':object._id, 'twitter':object.twitter};
+
+							  	item.timestamp = new Date(item.created_at).toISOString();
+							  	item.seen = false;
+							  	item.ignore = false;
+							  	item.created_post = null;
+							  	item.message = item.text;
+							  	item.original_message = item.text;
+							  	delete item.text;
+
+							  	items.push(item);
+
+
+
+
+
+
+
+
+							});
+
+							if(items.length > 0)
+								self.postsDB.bulk({docs:items}, function(err, body) {
+									  console.log('request done:')
+									  console.log(body);
+								});
+							else
+								console.log('nothing to update');
+
 						});
 					}
 				});
@@ -80,6 +134,25 @@ var spotr_worker = new function(){
 			
 		})
 	};
+
+	this.getPostsFromTwitter = function(pagetitle,cb){
+		var client = new Twitter({
+		  consumer_key: config.twitter_consumer_key,
+		  consumer_secret: config.twitter_consumer_secret,
+		  access_token_key: config.twitter_access_token_key,
+		  access_token_secret: config.twitter_access_token_secret
+		});
+		 
+		var params = {screen_name: pagetitle};
+		client.get('/statuses/user_timeline.json', params, function(error, tweets, response) {
+		  if (!error) {
+		    cb(tweets);
+		  }
+		  else{
+		  	console.log(error);
+		  }
+		});
+	}
 	this.getPostsFromFB = function(pagetitle,cb){
 
 			FB.api('oauth/access_token', {
