@@ -1,16 +1,19 @@
 {
-  "name": "spotr",
-  "version": "0.0.1",
+  "name": "spotr.html",
+  "version": "1.0.0-alpha.5",
   "description": "",
-  "main": "src/worker.js",
+  "main": "index.html",
   "dependencies": {
     "fb": "^2.0.0",
-    "nano": "^6.4.0"
+    "nano": "^6.4.0",
+    "twitter": "^1.7.1"
   },
-  "devDependencies": {},
+  "devDependencies": {
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "",
-  "license": "ISC"
+  "author": "Niczem",
+  "url": "https://transparency-everywhere.com",
+  "license": "MIT"
 }

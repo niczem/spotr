@@ -1,0 +1,845 @@
+<script src="bower_components/pouchdb/dist/pouchdb.min.js"></script>
+<script src="bower_components/requirejs/require.js"></script>
+
+
+<script>
+
+</script>
+
+<script>
+function nl2br (str, is_xhtml) {
+    var breakTag = (is_xhtml || typeof is_xhtml === 'undefined') ? '<br />' : '<br>';
+    return (str + '').replace(/([^>\r\n]?)(\r\n|\n\r|\r|\n)/g, '$1' + breakTag + '$2');
+}
+function timeSince(date) {
+
+  var seconds = Math.floor((new Date() - date) / 1000);
+
+  var interval = Math.floor(seconds / 31536000);
+
+  if (interval > 1) {
+    return interval + " years";
+  }
+  interval = Math.floor(seconds / 2592000);
+  if (interval > 1) {
+    return interval + " months";
+  }
+  interval = Math.floor(seconds / 86400);
+  if (interval > 1) {
+    return interval + " days";
+  }
+  interval = Math.floor(seconds / 3600);
+  if (interval > 1) {
+    return interval + " hours";
+  }
+  interval = Math.floor(seconds / 60);
+  if (interval > 1) {
+    return interval + " minutes";
+  }
+  return Math.floor(seconds) + " seconds";
+}
+
+
+requirejs(["./config.js"], function(config) {
+    console.log(config);
+    //This function is called when scripts/helper/util.js is loaded.
+    //If util.js calls define(), then this function is not fired until
+    //util's dependencies have loaded, and the util argument will hold
+    //the module value for "helper/util".
+
+
+
+var spotr_client = new function(){
+    this.init = function(){
+
+        var splitted_url = config.db_remote_url.split('://');
+        var db_url = splitted_url[0]+'://'+config.db_username+':'+config.db_password+'@'+splitted_url[1];
+
+        var self = this;
+        this.postDB = new PouchDB(db_url+'/posts');
+        this.targetDB = new PouchDB(db_url+'/targets');
+
+
+
+        //load targets after timeout (updateTargetProgress basically counts rows)
+        setTimeout(function(){
+            self.getTargetsFromDB(function(targets){
+                $.each(targets,function(tindex,target){
+                    $('#target-list').append(self.generateTargetRow(target));
+                    self.generateTargetNavEntry(target);
+                    self.updateTargetProgress(target.id)
+                });
+            });
+        },2000);
+
+        //load all posts
+        this.postDB.allDocs({
+          include_docs: true,
+          attachments: true
+        }).then(function (result) {
+          console.log(1337);
+          //console.log(result);
+          result.rows.sort(function(a, b) {
+                return new Date( a.doc.timestamp ) - new Date( b.doc.timestamp );
+          });
+          var last_targetId;
+          $.each(result.rows.reverse(),function(index,item){
+            console.log(item);
+            $('.event-list').append(generateLI(item.doc));
+          });
+
+          spotr_client.updateTargetProgress(last_targetId);
+
+          //mark_post_seen
+          $('.mark_post_seen').click(function(e){
+            var id = $(this).attr('data-post-id');
+            markPostAsSeen(id,function(){
+                $('.post_'+id).addClass('seen');
+            })
+
+          });
+
+
+          $('.ignore_post').click(function(e){
+            var id = $(this).attr('data-post-id');
+            ignorePost(id,function(){
+                $('.post_'+id).addClass('ignored');
+            })
+
+          });
+          $('.create_post,.toggle_editable').click(function(e){
+            console.log('yolo');
+            var id = $(this).attr('data-post-id');
+            $('.post_'+id).toggleClass('editable');
+
+          });
+          $('.post_on_facebook').click(function(e){
+            console.log('asdasd');
+            var id = $(this).attr('data-post-id');
+            
+            //$('.post_'+id+' ').toggleClass('editable');
+            var published,scheduled_publish_time,backdated_time,backdated_time_granularity;
+
+
+            var submit = true;
+
+            var messageObj = {
+                "message":$('.post_'+id+' .text_english').text(),
+                "child_attachments":""
+            }
+
+
+            if($('.post_'+id+' .backdate').is(':checked')){
+                messageObj.backdated_time = $('.post_'+id+' .backdate_timestamp').text();
+            }
+
+            if($('.post_'+id+' .link_to_original_post').is(':checked')){
+                messageObj.link = $('.post_'+id+' .url.post_info').text();
+            }
+
+
+            if($('.post_'+id+' .schedule').is(':checked')){
+
+
+                try {
+
+                    messageObj.scheduled_publish_time = new Date($('.post_'+id+' .scheduled_publish_time').val()).toISOString();
+                    messageObj.published = false;
+                }
+                catch(err) {
+                    alert('please enter a valid date');
+                    submit = false;
+                }
+
+
+            }
+            self.submitPostOnFacebook(id,messageObj,function(body){
+                $('.post_'+id).toggleClass('editable');
+                alert('post has been submitted');
+            });
+
+          });
+          //res.json({"users": result.rows});
+        }).catch(function (err) {
+          console.log(err);
+        });
+
+
+
+    };
+    this.submitPostOnFacebook = function(id,messageObj,cb){
+        messageObj.post_status = 'pending';
+        var self = this;
+        this.postDB.get(id).catch(function (err) {
+            if (err.name === 'not_found') {
+                return null
+            } else { // hm, some other error
+                throw err;
+            }
+        }).then(function (doc) {
+            doc.submitted_posts = {'facebook':messageObj};
+            //Inserting Document
+            self.postDB.put(doc).then(function (body) { cb(body); console.log(body); });
+          // sweet, here is our configDoc
+        }).catch(function (err) {
+          // handle any errors
+          console.log(err);
+        })    
+    }
+
+    this.getTargetImages = function(target){
+        var media_icon, logo_url;
+        if(target.facebook){
+            media_icon = "<i class=\"fa fa-facebook\"></i>";
+            logo_url = '//graph.facebook.com/'+target.facebook+'/picture?type=large';
+        }
+        if(target.twitter){
+            media_icon = "<i class=\"fa fa-twitter\"></i>";
+            logo_url = '//twitter.com/'+target.twitter+'/profile_image?size=original';
+        }
+        return [media_icon,logo_url];
+    }
+
+    this.generateTargetNavEntry = function(target){
+        var target = target.doc;
+
+        var media_icon = this.getTargetImages(target)[0];
+        $('#targetNavList').append('<li class="nav-item"><a class="nav-link" href="components/buttons.html">'+media_icon+' '+target._id+'</a></li>');
+
+    }
+
+    this.generateTargetRow = function(target){
+
+        var media_icon = '';
+        var target = target.doc;
+
+        media_icon = this.getTargetImages(target)[0];
+        logo_url = this.getTargetImages(target)[1];
+
+        var html="";
+        html += "<tr class='target_"+target._id+"''>";
+        html += "                                <td class=\"text-center\">";
+        html += "                                    "+media_icon;
+        html += "                                <\/td>";
+        html += "                                <td class=\"text-center\">";
+        html += "                                    <div class=\"avatar\">"
+;        html += "                                        <img src=\""+logo_url+"\" class=\"img-avatar\" alt=\"admin@bootstrapmaster.com\" src=\"img\/avatars\/1.jpg\">";
+        html += "                                        <span class=\"avatar-status badge-success\"><\/span>";
+        html += "                                    <\/div>";
+        html += "                                <\/td>";
+        html += "                                <td>";
+        html += "                                    <div>"+target._id+"<\/div>";
+        html += "                                    <div class=\"small text-muted\">";
+        html += "                                        "+target.title;
+        html += "                                    <\/div>";
+        html += "                                <\/td>";
+        html += "                                <td>";
+        html += "                                    <div class=\"clearfix\">";
+        html += "                                        <div class=\"float-left\">";
+        html += "                                            <strong class='post_percentage'>...loading<\/strong>";
+        html += "                                        <\/div>";
+        html += "                                        <div class=\"float-right\">";
+        html += "                                            <small class=\"text-muted number_of_seen_posts\"><\/small>";
+        html += "                                        <\/div>";
+        html += "                                    <\/div>";
+        html += "                                    <div class=\"progress progress-xs\">";
+        html += "                                        <div class=\"progress-bar bg-success\" role=\"progressbar\" style=\"width: 50%\" aria-valuenow=\"50\" aria-valuemin=\"0\" aria-valuemax=\"100\"><\/div>";
+        html += "                                    <\/div>";
+        html += "                                <\/td>";
+        html += "                                <td class=\"text-center number_of_total_posts\">";
+        html += "                                    "+media_icon;
+        html += "                                <\/td>";
+        html += "                                <td>";
+        html += "                                    <div class=\"small text-muted\">Last Post<\/div>";
+        html += "                                    <strong class='last_activity' data-timestamp='1970-01-01T13:37:27.000Z'>...loading<\/strong>";
+        html += "                                <\/td>";
+        html += "                            <\/tr>";
+        return html;
+    }
+    this.getTargetsFromDB = function(cb){
+        this.targetDB.allDocs({
+          include_docs: true,
+          attachments: true
+        }).then(function (result) {
+            console.log('targets');
+            cb(result.rows)
+        });
+    }
+    this.updateTargetProgress = function(target_id){
+
+        var ignored_count =  $('li.ignored.post[data-authorid="'+target_id+'"],li.seen.post[data-authorid="'+target_id+'"]').length;
+        $('#target-list tr.target_'+target_id+' .number_of_seen_posts').html('Ignored & Seen: '+ignored_count);
+        var total_count =  $('li.post[data-authorid="'+target_id+'"]').length;
+        $('#target-list tr.target_'+target_id+' .number_of_total_posts').html('Total: '+total_count);
+
+
+        var percentage = ignored_count/total_count*100;
+        $('#target-list tr.target_'+target_id+' .post_percentage').html(Math.round(percentage)+'%');
+        $('#target-list tr.target_'+target_id+' .progress-bar').css({'width':percentage+'%'});
+    }
+}
+
+function generateLI(post){
+
+    var img_url,title,attachments,media_icon,post_class;
+
+    if(new Date(post.timestamp) > new Date($('#target-list tr.target_'+post.author.targetId+' .last_activity').attr('data-timestamp'))){
+
+        $('#target-list tr.target_'+post.author.targetId+' .last_activity').attr('data-timestamp', post.timestamp).html(timeSince(new Date(post.timestamp))+' ago');
+
+    }
+
+    var post_class = post.ignore ? "ignored" : "";
+    post_class += post.seen ? "seen" : "";
+    if(post.submitted_posts){
+        post_class += ' post_submitted';
+    }
+
+    if(post.type == 'facebook'){
+        img_url = '//graph.facebook.com/'+post.author.facebook+'/picture?type=large';
+        media_icon = "<i class=\"fa fa-facebook smicon\"></i>";
+
+        title = post.post_type;
+        if(post.story){
+            title = post.author.facebook+' '+post.story;
+        }
+        if(post.attachments){
+
+            attachments = '<center><ul class="attachmentlist">';
+            $.each(post.attachments.data,function(index,value){
+
+                if(post.post_type === 'video'){
+                    var media_url = 'https://www.facebook.com/v/'+value.target.id;
+                    var thumbnail = '<img src="'+value.media.image.src+'">';
+                    //attachments += JSON.stringify(value);
+                    attachments += '<li><iframe src="https://www.facebook.com/plugins/video.php?href='+encodeURIComponent(value.target.url)+'&show_text=0&width=300" width="300" height="225" style="border:none;overflow:hidden"  scrolling="no" frameborder="0" allowTransparency="true" allowFullScreen="true"></iframe></li>';
+
+                }else{
+                    if(value.subattachments)
+                        $.each(value.subattachments.data,function(i,subattachment){
+                            attachments += '<li><a href="'+value.target.url+'" target="blank"><img src="'+subattachment.media.image.src+'"/></a></li>';
+                        });
+                    if(value.media)
+                        attachments += '<li><a href="'+value.target.url+'" target="blank"><img src="'+value.media.image.src+'"/></a></li>';
+                }
+
+                //attachments += '<li>'+JSON.stringify(value)+'</li>';
+            });
+            attachments += '</ul></center>';
+        }
+
+    }else if(post.type == 'twitter'){
+
+        img_url = '//twitter.com/'+post.author.twitter+'/profile_image?size=original';
+        media_icon = "<i class=\"fa fa-twitter smicon\"></i>";
+
+        title = '@'+post.author.twitter;
+        attachments = '<center><iframe border=0 frameborder=0 height=550 width=450 src="http://twitframe.com/show?url=https%3A%2F%2Ftwitter.com%2F'+post.user.screen_name+'%2Fstatus%2F'+post.id_str+'" id="'+post.id_str+'"></iframe></center>';
+         //attachments = '<iframe src="//publish.twitter.com/oembed?url=https://twitter.com/Interior/status/'+post.post_id+'"></iframe>';
+    }
+
+
+    var html = "";
+    html += ""+timeSince(new Date(post.timestamp))+" ago";
+    html += "                    <li class='post post_"+post._id+" "+post_class+"' data-authorid='"+post.author.targetId+"'>";
+
+    html += "                        "+media_icon+"<img alt=\""+post.author+"\" src=\""+img_url+"\" \/>";
+    html += "                        <div class=\"info\">";
+    if(title&&title.length > 0)
+    html += "                            <h3 class=\"title\">"+title+"<\/h3>";
+    html += "                            <p class=\"desc\">"+nl2br(post.message)+"<\/p>";
+    html += "                            <p class=\"timestamp show_on_editable\"><input type=\"checkbox\" class='backdate' checked=\"checked\"> backdate time to time of original post: <span class='post_info backdate_timestamp'>"+post.timestamp+"<\/p>";
+    html += "                            <p class=\"timestamp show_on_editable\"><input type=\"checkbox\" class='schedule'> schedule post <input type=\"datetime-local\" class=\"scheduled_publish_time\"><\/p>";
+    html += "                            <p class=\"text_english_caption\">English Text<\/p>";
+    html += "                            <p class=\"text_english\" contenteditable=\"true\">"+nl2br(post.message)+"<\/p>";
+    html += "                            <p class=\"timestamp show_on_editable\"><input type=\"checkbox\" class='link_to_original_post' checked=\"checked\"> Link original post and use orginal thumbnail: <span class=\"url post_info\">"+post.link+"</span><\/p>";
+    html += "<p class=\"timestamp show_on_editable\"><a href='#' class='btn btn-secondary toggle_editable'  data-post-id='"+post._id+"'>Cancel</a> <a href='#' class='btn btn-primary post_on_facebook' data-post-id='"+post._id+"'><i class=\"fa fa-facebook\"></i> Post on Facebook</a></p>";
+    html += '<p>'+attachments+'</p>';
+    html += "                        <\/div>";
+    html += "                        <div class=\"social\">";
+    html += "                            <ul>";
+    html += "                                <li class=\"edit\" style=\"width:33%;\"><a href=\"#\" title='Create post' data-post-id='"+post._id+"' class='create_post'><span class=\"fa fa-pencil-square-o\"><\/span><\/a><\/li>";
+    html += "                                <li class=\"confirm\" style=\"width:34%;\"><a href=\"#\" data-post-id='"+post._id+"' class='mark_post_seen'><span class=\"fa fa-check\" title='Mark post as seen'><\/span><\/a><\/li>";
+    html += "                                <li class=\"delete\" style=\"width:33%;\"><a href=\"#\" data-post-id='"+post._id+"' class='ignore_post' title='Ignore this post'><span class=\"fa fa-trash-o\"><\/span><\/a><\/li>";
+    html += "                            <\/ul>";
+    html += "                        <\/div>";
+    html += "                    <\/li>";
+
+
+    return html;
+}
+
+
+
+function ignorePost(id,cb){
+
+
+
+    spotr_client.postDB.get(id).catch(function (err) {
+        if (err.name === 'not_found') {
+            return null
+        } else { // hm, some other error
+            throw err;
+        }
+    }).then(function (doc) {
+        console.log(doc);
+        doc.ignore = true;
+        //Inserting Document
+        post_db.put(doc).then(function (body) { cb(body); spotr_client.updateTargetProgress(doc.author.targetId); });
+      // sweet, here is our configDoc
+    }).catch(function (err) {
+      // handle any errors
+    })
+
+}
+
+function markPostAsSeen(id,cb){
+
+
+
+    spotr_client.postDB.get(id).catch(function (err) {
+        if (err.name === 'not_found') {
+            return null
+        } else { // hm, some other error
+            throw err;
+        }
+    }).then(function (doc) {
+        console.log(doc);
+        doc.seen = true;
+        //Inserting Document
+        spotr_client.postDB.put(doc).then(function (body) { cb(body); console.log(body); spotr_client.updateTargetProgress(doc.author.targetId);});
+      // sweet, here is our configDoc
+    }).catch(function (err) {
+      // handle any errors
+    })
+
+}
+
+
+
+
+
+    var requireJS = [];
+
+    loadJS(requireJS, "js/views/main.js");
+    $(document).ready(function(){
+
+        spotr_client.init();
+        
+
+    });
+});
+
+
+
+
+</script>
+
+
+
+<div class="animated fadeIn">
+    
+
+
+<style>
+
+    .event-list {
+        list-style: none;
+        font-family: 'Lato', sans-serif;
+        margin: 0px 20px 20px 20px;
+        padding: 0px;
+    }
+    .event-list > li {
+        background-color: rgb(245, 245, 245);
+        box-shadow: 0px 0px 5px rgb(51, 51, 51);
+        box-shadow: 0px 0px 5px rgba(51, 51, 51, 0.7);
+        padding: 0px;
+        margin-bottom: 40px;
+    }
+
+    .event-list > li.post_submitted {
+        border-top:2px solid green;
+    }
+
+    .event-list .smicon{
+        position: absolute;
+        color: rgba(255,255,255,0.7);
+        font-size: 100px;
+        z-index: 1;
+        top: 10px;
+        left: 10px;
+    }
+
+    .event-list > li > time {
+        display: inline-block;
+        width: 100%;
+        color: rgb(255, 255, 255);
+        background-color: rgb(197, 44, 102);
+        padding: 5px;
+        text-align: center;
+        text-transform: uppercase;
+    }
+    .event-list > li:nth-child(even) > time {
+        background-color: rgb(165, 82, 167);
+    }
+    .event-list > li > time > span {
+        display: none;
+    }
+    .event-list > li > time > .day {
+        display: block;
+        font-size: 40pt;
+        font-weight: 100;
+        line-height: 1;
+    }
+    .event-list > li time > .month {
+        display: block;
+        font-size: 18pt;
+        font-weight: 500;
+        line-height: 1;
+    }
+    .event-list > li time > .year {
+        display: block;
+        font-size: 24pt;
+        font-weight: 500;
+        line-height: 1;
+    }
+    .event-list > li > img {
+        width: 100%;
+        mix-blend-mode: multiply;
+    }
+    .event-list > li > .info {
+        padding-top: 20px;
+        padding-right: 40px;
+        padding-left: 10px;
+        text-align: center;
+    }
+    .event-list > li > .info > .title {
+        font-size: 17pt;
+        font-weight: 700;
+        margin: 0px;
+    }
+    .event-list > li > .info > .desc {
+        font-size: 13pt;
+        font-weight: 300;
+        margin: 0px;
+    }
+    .event-list > li > .info > ul,
+    .event-list > li > .social > ul {
+        display: table;
+        list-style: none;
+        margin: 10px 0px 0px;
+        padding: 0px;
+        width: 100%;
+        text-align: center;
+        
+    }
+    .event-list > li > .social > ul {
+        margin: 0px;
+    }
+    .event-list > li > .info > ul > li,
+    .event-list > li > .social > ul > li {
+        display: table-cell;
+        cursor: pointer;
+        color: rgb(30, 30, 30);
+        font-size: 11pt;
+        font-weight: 300;
+        padding: 3px 0px;
+    }
+    .event-list > li > .info > ul > li > a {
+        display: block;
+        width: 100%;
+        color: rgb(30, 30, 30);
+        text-decoration: none;
+    } 
+    .event-list > li > .social > ul > li {    
+        padding: 0px;
+    }
+    .event-list > li > .social > ul > li > a {
+        padding: 3px 0px;
+    } 
+    .event-list > li > .info > ul > li:hover,
+    .event-list > li > .social > ul > li:hover {
+        color: rgb(30, 30, 30);
+        background-color: rgb(200, 200, 200);
+    }
+    .edit a,
+    .confirm a,
+    .delete a {
+        display: block;
+        width: 100%;
+        color: rgb(75, 110, 168) !important;
+    }
+    .confirm a {
+        color: rgb(79, 213, 248) !important;
+    }
+    .delete a {
+        color: rgb(221, 75, 57) !important;
+    }
+    .edit:hover a {
+        color: rgb(255, 255, 255) !important;
+        background-color: rgb(75, 110, 168) !important;
+    }
+    .confirm:hover a {
+        color: rgb(255, 255, 255) !important;
+        background-color: rgb(79, 213, 248) !important;
+    }
+    .delete:hover a {
+        color: rgb(255, 255, 255) !important;
+        background-color: rgb(221, 75, 57) !important;
+    }
+
+    @media (min-width: 768px) {
+        .event-list > li {
+            position: relative;
+            display: block;
+            padding: 0px;
+        }
+        .event-list > li > time,
+        .event-list > li > img  {
+            display: inline-block;
+        }
+        .event-list > li > time,
+        .event-list > li > img {
+            width: 120px;
+            float: left;
+        }
+        .event-list > li > .info {
+            background-color: rgb(245, 245, 245);
+            overflow: hidden;
+        }
+        .event-list > li > time,
+        .event-list > li > img {
+            width: 120px;
+            height: 120px;
+            padding: 0px;
+            margin: 0px;
+        }
+        .event-list > li > .info {
+            position: relative;
+            min-height: 120px;
+            text-align: left;
+            padding-right: 40px;
+        }   
+        .event-list > li > .info > .title, 
+        .event-list > li > .info > .desc {
+            padding: 0px 10px;
+        }
+        .event-list > li > .info > ul {
+            left: 0px;
+            bottom: 0px;
+        }
+        .event-list > li > .social {
+            position: absolute;
+            top: 0px;
+            right: 0px;
+            display: block;
+            width: 40px;
+        }
+        .event-list > li > .social > ul {
+            border-left: 1px solid rgb(230, 230, 230);
+        }
+        .event-list > li > .social > ul > li {          
+            display: block;
+            padding: 0px;
+        }
+        .event-list > li > .social > ul > li > a {
+            display: block;
+            width: 40px;
+            padding: 10px 0px 9px;
+        }
+    }
+
+
+
+
+    .post.ignored{
+        display:none;
+    }
+
+    .post.seen, .post.seen .info{
+        background-color: rgb(185, 185, 185);
+        color: rgb(97, 97, 97);
+    }
+
+    .text_english_caption,.text_english,.text_german_caption,.text_german,.show_on_editable{
+        display:none;
+    }
+
+    .post.editable .text_english_caption,.post.editable .text_german_caption, .post.editable .show_on_editable{
+        display:block;
+        margin: 5px 10px;
+    }
+    .post.editable .desc{
+        display:none;
+    }
+    .post.editable .text_english,.post.editable .text_german,.post.editable .show_on_editable{
+        display:block;
+        background:#FFF;
+        padding:10px;
+        border:1px #c9c9c9 solid;
+        margin: 5px 10px;
+    }
+
+    .attachmentlist{
+        max-width:70%;
+        margin: 5px 10px!important;
+    }
+
+    .attachmentlist li{
+        display: block!important;
+        min-width: 150px;
+        max-height: 150px;
+        float: left;
+        margin: 3px;
+    }
+    .attachmentlist img{
+        min-width: 150px;
+        max-height: 150px;
+    }
+
+    .post_info {
+        display: inline-block;
+        height: 1.5em;
+        margin-bottom: -0.5em;
+        max-width: 47%;
+        overflow: hidden;
+    }
+
+
+</style>
+
+
+    <div class="row">
+        <div class="col-md-12">
+            <div class="card">
+                <div class="card-header">
+                    Targets
+                </div>
+                <div class="card-block">
+                    <table class="table table-responsive table-hover table-outline mb-0">
+                        <thead class="thead-default">
+                            <tr>
+                                <th class="text-center">Platform</th>
+                                <th class="text-center"><i class="icon-people"></i>
+                                </th>
+                                <th>User</th>
+                                <th>Usage</th>
+                                <th>Posts</th>
+                                <th>Activity</th>
+                            </tr>
+                        </thead>
+                        <tbody id="target-list">
+                            <tr>
+                                <td class="text-center"><i class="fa fa-plus"></i></td>
+                                <td class="text-center"></td>
+                                <td><div>IOMLY</div><div class="small text-muted">IOM LIBYA</div></td>
+                                <td>                                    <div class="clearfix">                                        <div class="float-left">                                            <strong class="post_percentage">13%</strong>                                        </div>                                        <div class="float-right">                                            <small class="text-muted number_of_seen_posts">Ignored &amp; Seen: 3</small>                                        </div>                                    </div>                                    <div class="progress progress-xs">                                        <div class="progress-bar bg-success" role="progressbar" style="width: 13.0435%;" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100"></div>                                    </div>                                </td>                                <td class="text-center number_of_total_posts">Total: 23</td>                                <td>                                    <div class="small text-muted">Last Post</div>                                    <strong class="last_activity" data-timestamp="1970-01-01T13:37:27.000Z">...loading</strong>                                </td>                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <!--/.col-->
+    </div>
+    <!--/.row-->
+
+    <!--/.card-->
+        <div class="row">
+            <div class="[ col-xs-12 ]">
+                <ul class="event-list">
+
+
+
+                </ul>
+            </div>
+        </div>
+
+    <div class="row">
+        <div class="col-sm-6 col-lg-3">
+            <div class="social-box facebook">
+                <i class="fa fa-facebook"></i>
+                <div class="chart-wrapper">
+                    <canvas id="social-box-chart-1" height="90"></canvas>
+                </div>
+                <ul>
+                    <li>
+                        <strong>89k</strong>
+                        <span>friends</span>
+                    </li>
+                    <li>
+                        <strong>459</strong>
+                        <span>feeds</span>
+                    </li>
+                </ul>
+            </div>
+            <!--/.social-box-->
+        </div>
+        <!--/.col-->
+
+        <div class="col-sm-6 col-lg-3">
+            <div class="social-box twitter">
+                <i class="fa fa-twitter"></i>
+                <div class="chart-wrapper">
+                    <canvas id="social-box-chart-2" height="90"></canvas>
+                </div>
+                <ul>
+                    <li>
+                        <strong>973k</strong>
+                        <span>followers</span>
+                    </li>
+                    <li>
+                        <strong>1.792</strong>
+                        <span>tweets</span>
+                    </li>
+                </ul>
+            </div>
+            <!--/.social-box-->
+        </div>
+        <!--/.col-->
+
+        <div class="col-sm-6 col-lg-3">
+
+            <div class="social-box linkedin">
+                <i class="fa fa-linkedin"></i>
+                <div class="chart-wrapper">
+                    <canvas id="social-box-chart-3" height="90"></canvas>
+                </div>
+                <ul>
+                    <li>
+                        <strong>500+</strong>
+                        <span>contacts</span>
+                    </li>
+                    <li>
+                        <strong>292</strong>
+                        <span>feeds</span>
+                    </li>
+                </ul>
+            </div>
+            <!--/.social-box-->
+        </div>
+        <!--/.col-->
+
+        <div class="col-sm-6 col-lg-3">
+            <div class="social-box google-plus">
+                <i class="fa fa-google-plus"></i>
+                <div class="chart-wrapper">
+                    <canvas id="social-box-chart-4" height="90"></canvas>
+                </div>
+                <ul>
+                    <li>
+                        <strong>894</strong>
+                        <span>followers</span>
+                    </li>
+                    <li>
+                        <strong>92</strong>
+                        <span>circles</span>
+                    </li>
+                </ul>
+            </div>
+            <!--/.social-box-->
+        </div>
+        <!--/.col-->
+    </div>
+    <!--/.row-->
+</div>
+
